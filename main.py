@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from playwright.sync_api import sync_playwright
 from datetime import datetime
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, validator, root_validator
 from typing import Optional
 import re
 
@@ -32,9 +32,28 @@ UNIDADES = [
 ]
 
 class ManychatRequest(BaseModel):
-    Dcheckin: str  # Formato DD/MM/AAAA
-    Dcheckout: str  # Formato DD/MM/AAAA
+    # Aceita tanto Dchekin quanto Dcheckin
+    Dchekin: Optional[str] = None
+    Dcheckin: Optional[str] = None
+    Dcheckout: str
     numero_hospede_numero: int
+    
+    @root_validator(pre=True)
+    def normalizar_checkin(cls, values):
+        """
+        Aceita tanto Dchekin quanto Dcheckin e normaliza para Dcheckin
+        """
+        dchekin = values.get('Dchekin')
+        dcheckin = values.get('Dcheckin')
+        
+        # Se Dchekin foi fornecido, usa ele
+        if dchekin and not dcheckin:
+            values['Dcheckin'] = dchekin
+        # Se nenhum foi fornecido, erro
+        elif not dchekin and not dcheckin:
+            raise ValueError('É necessário fornecer Dchekin ou Dcheckin')
+        
+        return values
     
     @validator('numero_hospede_numero')
     def validar_hospedes(cls, v):
@@ -46,6 +65,8 @@ class ManychatRequest(BaseModel):
     
     @validator('Dcheckin', 'Dcheckout')
     def validar_formato_data(cls, v):
+        if v is None:
+            return v
         try:
             datetime.strptime(v, "%d/%m/%Y")
             return v
@@ -204,10 +225,11 @@ def root():
     return {
         "status": "online",
         "servico": "Robô Airbnb - Integração Manychat",
-        "versao": "2.1",
+        "versao": "2.2",
+        "nota": "Aceita tanto Dchekin quanto Dcheckin",
         "endpoints": {
             "consultar_post": "POST /consultar (JSON body)",
-            "consultar_get": "GET /consultar?Dcheckin=DD/MM/AAAA&Dcheckout=DD/MM/AAAA&numero_hospede_numero=N",
+            "consultar_get": "GET /consultar?Dchekin=DD/MM/AAAA&Dcheckout=DD/MM/AAAA&numero_hospede_numero=N",
             "executar": "GET /executar (legado)",
             "health": "GET /health"
         }
@@ -223,8 +245,8 @@ def consultar_post(request: ManychatRequest):
     """
     Endpoint para consulta via Manychat (POST com JSON)
     
-    Recebe:
-    - Dcheckin: Data de check-in no formato DD/MM/AAAA
+    Recebe (aceita ambas as grafias):
+    - Dchekin OU Dcheckin: Data de check-in no formato DD/MM/AAAA
     - Dcheckout: Data de check-out no formato DD/MM/AAAA
     - numero_hospede_numero: Número de hóspedes
     
@@ -242,18 +264,24 @@ def consultar_post(request: ManychatRequest):
 # Endpoint GET para testes e compatibilidade
 @app.get("/consultar")
 def consultar_get(
-    Dcheckin: str = Query(..., description="Data de check-in no formato DD/MM/AAAA"),
     Dcheckout: str = Query(..., description="Data de check-out no formato DD/MM/AAAA"),
-    numero_hospede_numero: int = Query(..., description="Número de hóspedes")
+    numero_hospede_numero: int = Query(..., description="Número de hóspedes"),
+    Dchekin: Optional[str] = Query(None, description="Data de check-in no formato DD/MM/AAAA (grafia alternativa)"),
+    Dcheckin: Optional[str] = Query(None, description="Data de check-in no formato DD/MM/AAAA")
 ):
     """
     Endpoint para consulta via GET (para testes)
     
-    Exemplo: /consultar?Dcheckin=25/12/2024&Dcheckout=30/12/2024&numero_hospede_numero=4
+    Aceita tanto Dchekin quanto Dcheckin
+    
+    Exemplos:
+    - /consultar?Dchekin=25/12/2024&Dcheckout=30/12/2024&numero_hospede_numero=4
+    - /consultar?Dcheckin=25/12/2024&Dcheckout=30/12/2024&numero_hospede_numero=4
     """
     # Valida os dados usando o modelo Pydantic
     try:
         request_data = ManychatRequest(
+            Dchekin=Dchekin,
             Dcheckin=Dcheckin,
             Dcheckout=Dcheckout,
             numero_hospede_numero=numero_hospede_numero
