@@ -1,9 +1,10 @@
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 from pydantic import BaseModel, validator
+from typing import Optional
 import re
 
 app = FastAPI(title="Robô Airbnb - Manychat Integration")
@@ -58,41 +59,14 @@ def converter_data_manychat(data_str: str) -> str:
     data_obj = datetime.strptime(data_str, "%d/%m/%Y")
     return data_obj.strftime("%Y-%m-%d")
 
-@app.get("/")
-def root():
-    return {
-        "status": "online",
-        "servico": "Robô Airbnb - Integração Manychat",
-        "versao": "2.0"
-    }
-
-@app.get("/health")
-def health_check():
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-
-@app.post("/consultar")
-def consultar(request: ManychatRequest):
+def processar_consulta(dcheckin: str, dcheckout: str, numero_hospedes: int):
     """
-    Endpoint para consulta via Manychat
-    
-    Recebe:
-    - Dcheckin: Data de check-in no formato DD/MM/AAAA
-    - Dcheckout: Data de check-out no formato DD/MM/AAAA
-    - numero_hospede_numero: Número de hóspedes
-    
-    Retorna:
-    - flat_colina_disponivel: "sim" ou "nao"
-    - flat_colina_preco: Preço total (ex: "R$ 1.500,00") ou ""
-    - flat_colina_url: URL da reserva ou ""
-    - flat_praia_disponivel: "sim" ou "nao"
-    - flat_praia_preco: Preço total (ex: "R$ 1.800,00") ou ""
-    - flat_praia_url: URL da reserva ou ""
-    - numero_noites: Número de noites
+    Função principal que processa a consulta no Airbnb
     """
     try:
         # Converte datas de DD/MM/AAAA para AAAA-MM-DD
-        checkin = converter_data_manychat(request.Dcheckin)
-        checkout = converter_data_manychat(request.Dcheckout)
+        checkin = converter_data_manychat(dcheckin)
+        checkout = converter_data_manychat(dcheckout)
         
         # Valida se checkout é posterior ao checkin
         data_in = datetime.strptime(checkin, "%Y-%m-%d")
@@ -105,7 +79,7 @@ def consultar(request: ManychatRequest):
             )
         
         numero_noites = (data_out - data_in).days
-        hospedes = request.numero_hospede_numero
+        hospedes = numero_hospedes
         adultos = hospedes  # Considera todos como adultos
         criancas = 0
         
@@ -118,8 +92,8 @@ def consultar(request: ManychatRequest):
             "flat_praia_preco": "",
             "flat_praia_url": "",
             "numero_noites": numero_noites,
-            "checkin": request.Dcheckin,
-            "checkout": request.Dcheckout,
+            "checkin": dcheckin,
+            "checkout": dcheckout,
             "hospedes": hospedes
         }
 
@@ -224,6 +198,69 @@ def consultar(request: ManychatRequest):
     except Exception as e:
         print(f"❌ Erro geral: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao processar consulta: {str(e)}")
+
+@app.get("/")
+def root():
+    return {
+        "status": "online",
+        "servico": "Robô Airbnb - Integração Manychat",
+        "versao": "2.1",
+        "endpoints": {
+            "consultar_post": "POST /consultar (JSON body)",
+            "consultar_get": "GET /consultar?Dcheckin=DD/MM/AAAA&Dcheckout=DD/MM/AAAA&numero_hospede_numero=N",
+            "executar": "GET /executar (legado)",
+            "health": "GET /health"
+        }
+    }
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+# Endpoint POST para Manychat (formato JSON)
+@app.post("/consultar")
+def consultar_post(request: ManychatRequest):
+    """
+    Endpoint para consulta via Manychat (POST com JSON)
+    
+    Recebe:
+    - Dcheckin: Data de check-in no formato DD/MM/AAAA
+    - Dcheckout: Data de check-out no formato DD/MM/AAAA
+    - numero_hospede_numero: Número de hóspedes
+    
+    Retorna:
+    - flat_colina_disponivel: "sim" ou "nao"
+    - flat_colina_preco: Preço total (ex: "R$ 1.500,00") ou ""
+    - flat_colina_url: URL da reserva ou ""
+    - flat_praia_disponivel: "sim" ou "nao"
+    - flat_praia_preco: Preço total (ex: "R$ 1.800,00") ou ""
+    - flat_praia_url: URL da reserva ou ""
+    - numero_noites: Número de noites
+    """
+    return processar_consulta(request.Dcheckin, request.Dcheckout, request.numero_hospede_numero)
+
+# Endpoint GET para testes e compatibilidade
+@app.get("/consultar")
+def consultar_get(
+    Dcheckin: str = Query(..., description="Data de check-in no formato DD/MM/AAAA"),
+    Dcheckout: str = Query(..., description="Data de check-out no formato DD/MM/AAAA"),
+    numero_hospede_numero: int = Query(..., description="Número de hóspedes")
+):
+    """
+    Endpoint para consulta via GET (para testes)
+    
+    Exemplo: /consultar?Dcheckin=25/12/2024&Dcheckout=30/12/2024&numero_hospede_numero=4
+    """
+    # Valida os dados usando o modelo Pydantic
+    try:
+        request_data = ManychatRequest(
+            Dcheckin=Dcheckin,
+            Dcheckout=Dcheckout,
+            numero_hospede_numero=numero_hospede_numero
+        )
+        return processar_consulta(request_data.Dcheckin, request_data.Dcheckout, request_data.numero_hospede_numero)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 # Endpoint legado para compatibilidade com site existente
 @app.get("/executar")
