@@ -212,6 +212,7 @@ def processar_consulta(dcheckin: str, dcheckout: str, numero_hospedes: int):
                     continue
 
         print("🔚 Consulta finalizada.")
+        print(f"📤 Retornando resultado: {resultado}")
         return resultado
 
     except ValueError as e:
@@ -225,9 +226,10 @@ def root():
     return {
         "status": "online",
         "servico": "Robô Airbnb - Integração Manychat",
-        "versao": "2.2",
-        "nota": "Aceita tanto Dchekin quanto Dcheckin",
+        "versao": "3.0",
+        "nota": "Aceita POST em / e /consultar. Aceita Dchekin e Dcheckin.",
         "endpoints": {
+            "consultar_post_raiz": "POST / (JSON body)",
             "consultar_post": "POST /consultar (JSON body)",
             "consultar_get": "GET /consultar?Dchekin=DD/MM/AAAA&Dcheckout=DD/MM/AAAA&numero_hospede_numero=N",
             "executar": "GET /executar (legado)",
@@ -239,11 +241,11 @@ def root():
 def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-# Endpoint POST para Manychat (formato JSON)
-@app.post("/consultar")
-def consultar_post(request: ManychatRequest):
+# Endpoint POST na RAIZ para Manychat
+@app.post("/")
+def consultar_raiz(request: ManychatRequest):
     """
-    Endpoint para consulta via Manychat (POST com JSON)
+    Endpoint na raiz (/) para consulta via Manychat (POST com JSON)
     
     Recebe (aceita ambas as grafias):
     - Dchekin OU Dcheckin: Data de check-in no formato DD/MM/AAAA
@@ -259,6 +261,30 @@ def consultar_post(request: ManychatRequest):
     - flat_praia_url: URL da reserva ou ""
     - numero_noites: Número de noites
     """
+    print(f"📥 Requisição recebida em /: {request.dict()}")
+    return processar_consulta(request.Dcheckin, request.Dcheckout, request.numero_hospede_numero)
+
+# Endpoint POST em /consultar para Manychat
+@app.post("/consultar")
+def consultar_post(request: ManychatRequest):
+    """
+    Endpoint /consultar para consulta via Manychat (POST com JSON)
+    
+    Recebe (aceita ambas as grafias):
+    - Dchekin OU Dcheckin: Data de check-in no formato DD/MM/AAAA
+    - Dcheckout: Data de check-out no formato DD/MM/AAAA
+    - numero_hospede_numero: Número de hóspedes
+    
+    Retorna:
+    - flat_colina_disponivel: "sim" ou "nao"
+    - flat_colina_preco: Preço total (ex: "R$ 1.500,00") ou ""
+    - flat_colina_url: URL da reserva ou ""
+    - flat_praia_disponivel: "sim" ou "nao"
+    - flat_praia_preco: Preço total (ex: "R$ 1.800,00") ou ""
+    - flat_praia_url: URL da reserva ou ""
+    - numero_noites: Número de noites
+    """
+    print(f"📥 Requisição recebida em /consultar: {request.dict()}")
     return processar_consulta(request.Dcheckin, request.Dcheckout, request.numero_hospede_numero)
 
 # Endpoint GET para testes e compatibilidade
