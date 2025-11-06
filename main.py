@@ -404,23 +404,47 @@ def consultar(request: ManychatRequest):
             sucesso = atualizar_planilha(sheet, linha, resultado)
             
             if sucesso:
+                # Prepara variáveis para o Manychat
+                disp_colina = "Sim" if resultado['flat_colina_disponivel'] == "sim" else "Não"
+                disp_praia = "Sim" if resultado['flat_praia_disponivel'] == "sim" else "Não"
+                
                 return {
                     "status": "success",
                     "message": "Consulta realizada e planilha atualizada com sucesso",
                     "linha": linha,
-                    "resultado": resultado
+                    "flat_colina_disponivel": disp_colina,
+                    "flat_colina_preco": resultado['flat_colina_preco'],
+                    "flat_praia_disponivel": disp_praia,
+                    "flat_praia_preco": resultado['flat_praia_preco'],
+                    "numero_noites": resultado['numero_noites']
                 }
             else:
+                # Mesmo com erro na planilha, retorna os dados para o Manychat
+                disp_colina = "Sim" if resultado['flat_colina_disponivel'] == "sim" else "Não"
+                disp_praia = "Sim" if resultado['flat_praia_disponivel'] == "sim" else "Não"
+                
                 return {
                     "status": "error",
                     "message": "Consulta realizada mas erro ao atualizar planilha",
-                    "resultado": resultado
+                    "flat_colina_disponivel": disp_colina,
+                    "flat_colina_preco": resultado['flat_colina_preco'],
+                    "flat_praia_disponivel": disp_praia,
+                    "flat_praia_preco": resultado['flat_praia_preco'],
+                    "numero_noites": resultado['numero_noites']
                 }
         else:
+            # Mesmo sem encontrar a linha, retorna os dados para o Manychat
+            disp_colina = "Sim" if resultado['flat_colina_disponivel'] == "sim" else "Não"
+            disp_praia = "Sim" if resultado['flat_praia_disponivel'] == "sim" else "Não"
+            
             return {
                 "status": "error",
                 "message": f"Linha não encontrada na planilha para ID={request.id_do_contato}",
-                "resultado": resultado
+                "flat_colina_disponivel": disp_colina,
+                "flat_colina_preco": resultado['flat_colina_preco'],
+                "flat_praia_disponivel": disp_praia,
+                "flat_praia_preco": resultado['flat_praia_preco'],
+                "numero_noites": resultado['numero_noites']
             }
             
     except Exception as e:
