@@ -37,6 +37,7 @@ UNIDADES = [
 
 # ID da planilha Google Sheets
 SPREADSHEET_ID = "1JG6srGE3WRt2OBzeHCUntW3KOGpzLTTVM83mbw1MEXU"
+WORKSHEET_NAME = "Consultas_Airbnb"  # Nome da aba
 
 class ManychatRequest(BaseModel):
     # Dados do usuário
@@ -387,7 +388,8 @@ def consultar(request: ManychatRequest):
         # Conecta ao Google Sheets
         print("🔗 Conectando ao Google Sheets...")
         client = conectar_google_sheets()
-        sheet = client.open_by_key(SPREADSHEET_ID).sheet1
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        sheet = spreadsheet.worksheet(WORKSHEET_NAME)
         
         # Encontra a linha na planilha
         linha = encontrar_linha_planilha(
