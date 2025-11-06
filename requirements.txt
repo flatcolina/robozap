@@ -2,3 +2,5 @@ fastapi
 uvicorn[standard]
 playwright
 pydantic
+gspread
+oauth2client
