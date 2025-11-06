@@ -6,8 +6,12 @@ from datetime import datetime
 from pydantic import BaseModel, validator, root_validator
 from typing import Optional
 import re
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import json
+import os
 
-app = FastAPI(title="Robô Airbnb - Manychat Integration")
+app = FastAPI(title="Robô Airbnb - Google Sheets Integration")
 
 # Libera CORS para Manychat
 app.add_middleware(
@@ -31,11 +35,22 @@ UNIDADES = [
     }
 ]
 
+# ID da planilha Google Sheets
+SPREADSHEET_ID = "1JG6srGE3WRt2OBzeHCUntW3KOGpzLTTVM83mbw1MEXU"
+
 class ManychatRequest(BaseModel):
-    # Aceita tanto Dchekin quanto Dcheckin
+    # Dados do usuário
+    nome: Optional[str] = None
+    email: Optional[str] = None
+    numero_whats: Optional[str] = None
+    id_do_contato: str  # ID do WhatsApp (obrigatório)
+    
+    # Datas (aceita tanto Dchekin quanto Dcheckin)
     Dchekin: Optional[str] = None
     Dcheckin: Optional[str] = None
     Dcheckout: str
+    
+    # Número de hóspedes
     numero_hospede_numero: int
     
     @root_validator(pre=True)
@@ -73,6 +88,114 @@ class ManychatRequest(BaseModel):
         except ValueError:
             raise ValueError(f'Data inválida: {v}. Use o formato DD/MM/AAAA')
 
+def conectar_google_sheets():
+    """
+    Conecta ao Google Sheets usando credenciais de service account
+    """
+    try:
+        # Lê as credenciais da variável de ambiente
+        creds_json = os.environ.get('GOOGLE_CREDENTIALS')
+        if not creds_json:
+            raise Exception("GOOGLE_CREDENTIALS não configurada")
+        
+        creds_dict = json.loads(creds_json)
+        
+        scope = [
+            'https://spreadsheets.google.com/feeds',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        
+        return client
+    except Exception as e:
+        print(f"❌ Erro ao conectar Google Sheets: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao conectar Google Sheets: {str(e)}")
+
+def encontrar_linha_planilha(sheet, id_contato, checkin, checkout):
+    """
+    Encontra a linha na planilha baseado no ID do contato e datas
+    """
+    try:
+        # Pega todos os valores da planilha
+        all_values = sheet.get_all_values()
+        
+        # Cabeçalho está na linha 1 (índice 0)
+        # Dados começam na linha 2 (índice 1)
+        
+        print(f"🔍 Procurando linha para: ID={id_contato}, Checkin={checkin}, Checkout={checkout}")
+        
+        for idx, row in enumerate(all_values[1:], start=2):  # Começa da linha 2
+            # Coluna D (índice 3) = ID do Contato
+            # Coluna E (índice 4) = checkin
+            # Coluna F (índice 5) = checkout
+            
+            if len(row) > 5:
+                row_id = row[3].strip() if len(row) > 3 else ""
+                row_checkin = row[4].strip() if len(row) > 4 else ""
+                row_checkout = row[5].strip() if len(row) > 5 else ""
+                
+                print(f"  Linha {idx}: ID={row_id}, Checkin={row_checkin}, Checkout={row_checkout}")
+                
+                if (row_id == id_contato and 
+                    row_checkin == checkin and 
+                    row_checkout == checkout):
+                    print(f"✅ Linha encontrada: {idx}")
+                    return idx
+        
+        print(f"❌ Linha não encontrada para ID={id_contato}")
+        return None
+        
+    except Exception as e:
+        print(f"❌ Erro ao procurar linha: {str(e)}")
+        return None
+
+def atualizar_planilha(sheet, linha, resultado):
+    """
+    Atualiza a planilha com os resultados da consulta
+    """
+    try:
+        # Coluna G (7) = disp_colina
+        # Coluna H (8) = valor_colina
+        # Coluna I (9) = disp_praia
+        # Coluna J (10) = valor_praia
+        # Coluna K (11) = Achou (número de noites)
+        
+        updates = []
+        
+        # Flat Colina
+        disp_colina = "Sim" if resultado['flat_colina_disponivel'] == "sim" else "Não"
+        valor_colina = resultado['flat_colina_preco'] if resultado['flat_colina_preco'] else ""
+        
+        # Flat Praia
+        disp_praia = "Sim" if resultado['flat_praia_disponivel'] == "sim" else "Não"
+        valor_praia = resultado['flat_praia_preco'] if resultado['flat_praia_preco'] else ""
+        
+        # Número de noites
+        numero_noites = str(resultado['numero_noites'])
+        
+        print(f"📝 Atualizando linha {linha}:")
+        print(f"  G (disp_colina): {disp_colina}")
+        print(f"  H (valor_colina): {valor_colina}")
+        print(f"  I (disp_praia): {disp_praia}")
+        print(f"  J (valor_praia): {valor_praia}")
+        print(f"  K (Achou): {numero_noites}")
+        
+        # Atualiza célula por célula
+        sheet.update_cell(linha, 7, disp_colina)      # G
+        sheet.update_cell(linha, 8, valor_colina)     # H
+        sheet.update_cell(linha, 9, disp_praia)       # I
+        sheet.update_cell(linha, 10, valor_praia)     # J
+        sheet.update_cell(linha, 11, numero_noites)   # K
+        
+        print(f"✅ Planilha atualizada com sucesso!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Erro ao atualizar planilha: {str(e)}")
+        return False
+
 def converter_data_manychat(data_str: str) -> str:
     """
     Converte data de DD/MM/AAAA (Manychat) para AAAA-MM-DD (Airbnb)
@@ -101,7 +224,7 @@ def processar_consulta(dcheckin: str, dcheckout: str, numero_hospedes: int):
         
         numero_noites = (data_out - data_in).days
         hospedes = numero_hospedes
-        adultos = hospedes  # Considera todos como adultos
+        adultos = hospedes
         criancas = 0
         
         # Inicializa resultado padrão
@@ -123,11 +246,9 @@ def processar_consulta(dcheckin: str, dcheckout: str, numero_hospedes: int):
                 try:
                     print(f"🔍 Verificando: {unidade['nome']} ({unidade['id']})")
                     
-                    # Abre novo browser para cada unidade
                     browser = p.chromium.launch(headless=True)
                     context = browser.new_context()
                     
-                    # Bloqueia recursos desnecessários
                     def handle_route(route):
                         url = route.request.url
                         if any(domain in url for domain in [
@@ -169,7 +290,6 @@ def processar_consulta(dcheckin: str, dcheckout: str, numero_hospedes: int):
 
                     content = page.content()
                     
-                    # Verifica se está disponível procurando por mensagens de indisponibilidade
                     indisponivel_patterns = [
                         "não está disponível",
                         "não disponível",
@@ -180,7 +300,6 @@ def processar_consulta(dcheckin: str, dcheckout: str, numero_hospedes: int):
                     
                     esta_indisponivel = any(pattern.lower() in content.lower() for pattern in indisponivel_patterns)
                     
-                    # Procura por preço
                     match = re.search(r'R\$\s?\d{1,3}(\.\d{3})*,\d{2}', content)
                     
                     if match and not esta_indisponivel:
@@ -191,7 +310,6 @@ def processar_consulta(dcheckin: str, dcheckout: str, numero_hospedes: int):
                         
                         print(f"✅ Disponível - Preço: {preco_formatado}")
                         
-                        # Atualiza resultado baseado na chave da unidade
                         if unidade['chave'] == 'flat_colina':
                             resultado['flat_colina_disponivel'] = "sim"
                             resultado['flat_colina_preco'] = preco_formatado
@@ -212,7 +330,6 @@ def processar_consulta(dcheckin: str, dcheckout: str, numero_hospedes: int):
                     continue
 
         print("🔚 Consulta finalizada.")
-        print(f"📤 Retornando resultado: {resultado}")
         return resultado
 
     except ValueError as e:
@@ -225,14 +342,11 @@ def processar_consulta(dcheckin: str, dcheckout: str, numero_hospedes: int):
 def root():
     return {
         "status": "online",
-        "servico": "Robô Airbnb - Integração Manychat",
-        "versao": "3.0",
-        "nota": "Aceita POST em / e /consultar. Aceita Dchekin e Dcheckin.",
+        "servico": "Robô Airbnb - Google Sheets Integration",
+        "versao": "4.0",
+        "nota": "Integrado com Google Sheets",
         "endpoints": {
-            "consultar_post_raiz": "POST / (JSON body)",
-            "consultar_post": "POST /consultar (JSON body)",
-            "consultar_get": "GET /consultar?Dchekin=DD/MM/AAAA&Dcheckout=DD/MM/AAAA&numero_hospede_numero=N",
-            "executar": "GET /executar (legado)",
+            "consultar_post": "POST / ou POST /consultar (JSON body)",
             "health": "GET /health"
         }
     }
@@ -241,87 +355,81 @@ def root():
 def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-# Endpoint POST na RAIZ para Manychat
 @app.post("/")
-def consultar_raiz(request: ManychatRequest):
-    """
-    Endpoint na raiz (/) para consulta via Manychat (POST com JSON)
-    
-    Recebe (aceita ambas as grafias):
-    - Dchekin OU Dcheckin: Data de check-in no formato DD/MM/AAAA
-    - Dcheckout: Data de check-out no formato DD/MM/AAAA
-    - numero_hospede_numero: Número de hóspedes
-    
-    Retorna:
-    - flat_colina_disponivel: "sim" ou "nao"
-    - flat_colina_preco: Preço total (ex: "R$ 1.500,00") ou ""
-    - flat_colina_url: URL da reserva ou ""
-    - flat_praia_disponivel: "sim" ou "nao"
-    - flat_praia_preco: Preço total (ex: "R$ 1.800,00") ou ""
-    - flat_praia_url: URL da reserva ou ""
-    - numero_noites: Número de noites
-    """
-    print(f"📥 Requisição recebida em /: {request.dict()}")
-    return processar_consulta(request.Dcheckin, request.Dcheckout, request.numero_hospede_numero)
-
-# Endpoint POST em /consultar para Manychat
 @app.post("/consultar")
-def consultar_post(request: ManychatRequest):
+def consultar(request: ManychatRequest):
     """
-    Endpoint /consultar para consulta via Manychat (POST com JSON)
+    Endpoint para consulta via Manychat com integração Google Sheets
     
-    Recebe (aceita ambas as grafias):
+    Recebe:
+    - nome: Nome do usuário
+    - email: Email do usuário
+    - numero_whats: Número do WhatsApp
+    - id_do_contato: ID do contato no WhatsApp (obrigatório)
     - Dchekin OU Dcheckin: Data de check-in no formato DD/MM/AAAA
     - Dcheckout: Data de check-out no formato DD/MM/AAAA
     - numero_hospede_numero: Número de hóspedes
     
-    Retorna:
-    - flat_colina_disponivel: "sim" ou "nao"
-    - flat_colina_preco: Preço total (ex: "R$ 1.500,00") ou ""
-    - flat_colina_url: URL da reserva ou ""
-    - flat_praia_disponivel: "sim" ou "nao"
-    - flat_praia_preco: Preço total (ex: "R$ 1.800,00") ou ""
-    - flat_praia_url: URL da reserva ou ""
-    - numero_noites: Número de noites
+    Atualiza a planilha Google Sheets com os resultados
     """
-    print(f"📥 Requisição recebida em /consultar: {request.dict()}")
-    return processar_consulta(request.Dcheckin, request.Dcheckout, request.numero_hospede_numero)
-
-# Endpoint GET para testes e compatibilidade
-@app.get("/consultar")
-def consultar_get(
-    Dcheckout: str = Query(..., description="Data de check-out no formato DD/MM/AAAA"),
-    numero_hospede_numero: int = Query(..., description="Número de hóspedes"),
-    Dchekin: Optional[str] = Query(None, description="Data de check-in no formato DD/MM/AAAA (grafia alternativa)"),
-    Dcheckin: Optional[str] = Query(None, description="Data de check-in no formato DD/MM/AAAA")
-):
-    """
-    Endpoint para consulta via GET (para testes)
-    
-    Aceita tanto Dchekin quanto Dcheckin
-    
-    Exemplos:
-    - /consultar?Dchekin=25/12/2024&Dcheckout=30/12/2024&numero_hospede_numero=4
-    - /consultar?Dcheckin=25/12/2024&Dcheckout=30/12/2024&numero_hospede_numero=4
-    """
-    # Valida os dados usando o modelo Pydantic
     try:
-        request_data = ManychatRequest(
-            Dchekin=Dchekin,
-            Dcheckin=Dcheckin,
-            Dcheckout=Dcheckout,
-            numero_hospede_numero=numero_hospede_numero
+        print(f"📥 Requisição recebida: {request.dict()}")
+        
+        # Processa a consulta no Airbnb
+        resultado = processar_consulta(
+            request.Dcheckin, 
+            request.Dcheckout, 
+            request.numero_hospede_numero
         )
-        return processar_consulta(request_data.Dcheckin, request_data.Dcheckout, request_data.numero_hospede_numero)
+        
+        print(f"📤 Resultado da consulta: {resultado}")
+        
+        # Conecta ao Google Sheets
+        print("🔗 Conectando ao Google Sheets...")
+        client = conectar_google_sheets()
+        sheet = client.open_by_key(SPREADSHEET_ID).sheet1
+        
+        # Encontra a linha na planilha
+        linha = encontrar_linha_planilha(
+            sheet,
+            request.id_do_contato,
+            request.Dcheckin,
+            request.Dcheckout
+        )
+        
+        if linha:
+            # Atualiza a planilha
+            sucesso = atualizar_planilha(sheet, linha, resultado)
+            
+            if sucesso:
+                return {
+                    "status": "success",
+                    "message": "Consulta realizada e planilha atualizada com sucesso",
+                    "linha": linha,
+                    "resultado": resultado
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": "Consulta realizada mas erro ao atualizar planilha",
+                    "resultado": resultado
+                }
+        else:
+            return {
+                "status": "error",
+                "message": f"Linha não encontrada na planilha para ID={request.id_do_contato}",
+                "resultado": resultado
+            }
+            
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        print(f"❌ Erro geral: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Endpoint legado para compatibilidade com site existente
 @app.get("/executar")
 def executar_legado(checkin: str, checkout: str, adultos: int, criancas: int = 0):
     """
     Endpoint legado para compatibilidade com o site www.praiadoscarneirosresort.com
-    Mantém o formato original de resposta
     """
     try:
         hospedes = adultos + criancas
@@ -371,7 +479,6 @@ def executar_legado(checkin: str, checkout: str, adultos: int, criancas: int = 0
                     f"&isWorkTrip=false"
                     f"&numberOfInfants=0&numberOfPets=0"
                 )
-                print(f"🌐 URL acessada: {url}")
                 page.goto(url)
                 page.wait_for_timeout(5000)
 
@@ -381,7 +488,6 @@ def executar_legado(checkin: str, checkout: str, adultos: int, criancas: int = 0
                     preco_texto = match.group()
                     preco_limpo = preco_texto.replace("R$", "").replace(".", "").replace(",", ".").strip()
                     preco_total = float(preco_limpo)
-                    print(f"✅ Preço encontrado para {unidade['nome']}: {match.group()}")
                     resultados.append({
                         "nome": unidade["nome"],
                         "preco": f"R$ {preco_total:.2f}",
@@ -390,9 +496,6 @@ def executar_legado(checkin: str, checkout: str, adultos: int, criancas: int = 0
                     })
                 
                 browser.close()
-                print(f"🔄 Navegador fechado para {unidade['nome']}")
-
-            print("🔚 Consulta finalizada.")
 
         return {"status": "ok", "resultado": resultados}
 
