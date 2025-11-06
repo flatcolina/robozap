@@ -214,23 +214,23 @@ def atualizar_manychat_fields(subscriber_id: str, resultado: dict):
         # Campos a serem atualizados
         fields = [
             {
-                "field_id": 18903729,  # flat_colina_disponivel
+                "field_id": 13859802,  # flat_colina_disponivel
                 "field_value": disp_colina
             },
             {
-                "field_id": 18903730,  # flat_colina_preco
+                "field_id": 13859803,  # flat_colina_preco
                 "field_value": resultado['flat_colina_preco']
             },
             {
-                "field_id": 18903731,  # flat_praia_disponivel
+                "field_id": 13859805,  # flat_praia_disponivel
                 "field_value": disp_praia
             },
             {
-                "field_id": 18903732,  # flat_praia_preco
+                "field_id": 13859807,  # flat_praia_preco
                 "field_value": resultado['flat_praia_preco']
             },
             {
-                "field_id": 18903733,  # numero_noites
+                "field_id": 13859813,  # numero_noites
                 "field_value": str(resultado['numero_noites'])
             }
         ]
