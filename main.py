@@ -10,6 +10,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
 import os
+import requests
 
 app = FastAPI(title="Robô Airbnb - Google Sheets Integration")
 
@@ -38,6 +39,10 @@ UNIDADES = [
 # ID da planilha Google Sheets
 SPREADSHEET_ID = "1JG6srGE3WRt2OBzeHCUntW3KOGpzLTTVM83mbw1MEXU"
 WORKSHEET_NAME = "Consultas_Airbnb"  # Nome da aba
+
+# API do Manychat
+MANYCHAT_API_KEY = "2904114:31467613056afe64ecf94d0781c58e6d"
+MANYCHAT_API_URL = "https://api.manychat.com/fb/subscriber/setCustomField"
 
 class ManychatRequest(BaseModel):
     # Dados do usuário
@@ -195,6 +200,68 @@ def atualizar_planilha(sheet, linha, resultado):
         
     except Exception as e:
         print(f"❌ Erro ao atualizar planilha: {str(e)}")
+        return False
+
+def atualizar_manychat_fields(subscriber_id: str, resultado: dict):
+    """
+    Atualiza as Custom Fields do usuário no Manychat via API
+    """
+    try:
+        # Prepara os valores
+        disp_colina = "Sim" if resultado['flat_colina_disponivel'] == "sim" else "Não"
+        disp_praia = "Sim" if resultado['flat_praia_disponivel'] == "sim" else "Não"
+        
+        # Campos a serem atualizados
+        fields = [
+            {
+                "field_id": 18903729,  # flat_colina_disponivel
+                "field_value": disp_colina
+            },
+            {
+                "field_id": 18903730,  # flat_colina_preco
+                "field_value": resultado['flat_colina_preco']
+            },
+            {
+                "field_id": 18903731,  # flat_praia_disponivel
+                "field_value": disp_praia
+            },
+            {
+                "field_id": 18903732,  # flat_praia_preco
+                "field_value": resultado['flat_praia_preco']
+            },
+            {
+                "field_id": 18903733,  # numero_noites
+                "field_value": str(resultado['numero_noites'])
+            }
+        ]
+        
+        headers = {
+            "Authorization": f"Bearer {MANYCHAT_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        print(f"🔄 Atualizando Custom Fields no Manychat para subscriber {subscriber_id}...")
+        
+        # Atualiza cada campo
+        for field in fields:
+            payload = {
+                "subscriber_id": subscriber_id,
+                "field_id": field["field_id"],
+                "field_value": field["field_value"]
+            }
+            
+            response = requests.post(MANYCHAT_API_URL, json=payload, headers=headers)
+            
+            if response.status_code == 200:
+                print(f"  ✅ Campo {field['field_id']} atualizado: {field['field_value']}")
+            else:
+                print(f"  ⚠️ Erro ao atualizar campo {field['field_id']}: {response.status_code} - {response.text}")
+        
+        print(f"✅ Custom Fields atualizados no Manychat!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Erro ao atualizar Manychat: {str(e)}")
         return False
 
 def converter_data_manychat(data_str: str) -> str:
@@ -403,6 +470,9 @@ def consultar(request: ManychatRequest):
             # Atualiza a planilha
             sucesso = atualizar_planilha(sheet, linha, resultado)
             
+            # Atualiza Custom Fields no Manychat via API
+            atualizar_manychat_fields(request.id_do_contato, resultado)
+            
             if sucesso:
                 # Prepara variáveis para o Manychat
                 disp_colina = "Sim" if resultado['flat_colina_disponivel'] == "sim" else "Não"
@@ -410,7 +480,7 @@ def consultar(request: ManychatRequest):
                 
                 return {
                     "status": "success",
-                    "message": "Consulta realizada e planilha atualizada com sucesso",
+                    "message": "Consulta realizada, planilha e Manychat atualizados com sucesso",
                     "linha": linha,
                     "flat_colina_disponivel": disp_colina,
                     "flat_colina_preco": resultado['flat_colina_preco'],
@@ -424,8 +494,8 @@ def consultar(request: ManychatRequest):
                 disp_praia = "Sim" if resultado['flat_praia_disponivel'] == "sim" else "Não"
                 
                 return {
-                    "status": "error",
-                    "message": "Consulta realizada mas erro ao atualizar planilha",
+                    "status": "partial_success",
+                    "message": "Consulta realizada e Manychat atualizado, mas erro ao atualizar planilha",
                     "flat_colina_disponivel": disp_colina,
                     "flat_colina_preco": resultado['flat_colina_preco'],
                     "flat_praia_disponivel": disp_praia,
@@ -433,13 +503,15 @@ def consultar(request: ManychatRequest):
                     "numero_noites": resultado['numero_noites']
                 }
         else:
-            # Mesmo sem encontrar a linha, retorna os dados para o Manychat
+            # Mesmo sem encontrar a linha, atualiza o Manychat
+            atualizar_manychat_fields(request.id_do_contato, resultado)
+            
             disp_colina = "Sim" if resultado['flat_colina_disponivel'] == "sim" else "Não"
             disp_praia = "Sim" if resultado['flat_praia_disponivel'] == "sim" else "Não"
             
             return {
-                "status": "error",
-                "message": f"Linha não encontrada na planilha para ID={request.id_do_contato}",
+                "status": "partial_success",
+                "message": f"Consulta realizada e Manychat atualizado, mas linha não encontrada na planilha para ID={request.id_do_contato}",
                 "flat_colina_disponivel": disp_colina,
                 "flat_colina_preco": resultado['flat_colina_preco'],
                 "flat_praia_disponivel": disp_praia,
