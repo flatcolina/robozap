@@ -425,7 +425,40 @@ def health_check():
 
 @app.post("/")
 @app.post("/consultar")
-def consultar(request: ManychatRequest):
+async def consultar(request: Request):
+    """
+    Endpoint para consulta via Manychat com integração Google Sheets
+    """
+    try:
+        # Captura o corpo bruto da requisição
+        body = await request.body()
+        print(f"📥 Corpo bruto recebido: {body.decode('utf-8')}")
+        
+        # Tenta parsear como JSON
+        try:
+            data = await request.json()
+            print(f"📝 Dados parseados: {data}")
+        except Exception as e:
+            print(f"❌ Erro ao parsear JSON: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"JSON inválido: {str(e)}")
+        
+        # Valida e converte para ManychatRequest
+        try:
+            manychat_request = ManychatRequest(**data)
+            print(f"✅ Requisição validada com sucesso")
+        except Exception as e:
+            print(f"❌ Erro de validação: {str(e)}")
+            raise HTTPException(status_code=422, detail=f"Erro de validação: {str(e)}")
+        
+        return await processar_requisicao(manychat_request)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Erro geral no endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def processar_requisicao(request: ManychatRequest):
     """
     Endpoint para consulta via Manychat com integração Google Sheets
     
